@@ -2,6 +2,7 @@
 
 Este repositorio reúne scripts y utilidades en Python orientados a optimizar tareas operativas de distintas áreas de una empresa (logística/operaciones, prevención, seguimiento, soporte interno, etc.).  
 El objetivo es centralizar automatizaciones, estandarizar configuración y facilitar el mantenimiento.
+
 ---
 
 ## Contenidos principales
