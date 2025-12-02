@@ -24,7 +24,6 @@ import sys
 import os
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
 load_dotenv()
 
 def click_button(driver, selector, by=By.CSS_SELECTOR, wait_time=10):
@@ -41,16 +40,14 @@ def click_button(driver, selector, by=By.CSS_SELECTOR, wait_time=10):
 def buscar_pedido(driver, pedido_id):
     """
     Abre directamente un pedido usando su ID de Odoo en la URL. 
-    
-    Args:
-        driver: instancia de Selenium WebDriver
-        pedido_id: ID interno de Odoo (por ejemplo: 371178)
     """
     try:
         odoo_base_url = os.getenv("ODOO_BASE_URL")
-        url = f"{odoo_base_url}/web#id={pedido_id}&menu_id=182&cids=1&action=299&model=sale.order&view_type=form"
+        menu_id = os.getenv("ODOO_MENU_ID", "182")
+        action_id = os.getenv("ODOO_ACTION_ID", "299")
+        url = f"{odoo_base_url}/web#id={pedido_id}&menu_id={menu_id}&cids=1&action={action_id}&model=sale.order&view_type=form"
         driver.get(url)
-        time.sleep(10)  # Esperar a que cargue la página
+        time.sleep(10)
         print(f"✅ Pedido ID {pedido_id} abierto correctamente")
         return True
     except Exception as e:
@@ -60,15 +57,12 @@ def buscar_pedido(driver, pedido_id):
 def parse_moneda(texto: str) -> Decimal:
     """
     Convierte strings monetarios como "$ 1.600,00", "1,234.56", "-2.345,00" a Decimal.
-    Maneja espacios no separables (NBSP) y separadores de miles. 
     """
     if texto is None:
         raise ValueError("Texto vacío")
 
     s = str(texto).strip(). replace('\u00A0', '').replace('\u202F', '')
-    # Detecta signo
-    sign = '-' if s.lstrip(). startswith('-') else ''
-    # Deja sólo dígitos y separadores
+    sign = '-' if s. lstrip(). startswith('-') else ''
     cleaned = ''.join(ch for ch in s if ch.isdigit() or ch in '.,')
     if not cleaned:
         raise ValueError(f"No se encontraron dígitos en: {texto! r}")
@@ -78,10 +72,8 @@ def parse_moneda(texto: str) -> Decimal:
 
     decimal_sep = None
     if last_comma != -1 and last_dot != -1:
-        # Si hay ambos, el último suele ser el decimal
         decimal_sep = ',' if last_comma > last_dot else '.'
     elif last_comma != -1 or last_dot != -1:
-        # Si hay uno, asume decimal si hay 2 dígitos a la derecha
         idx = last_comma if last_comma != -1 else last_dot
         if (len(cleaned) - idx - 1) == 2:
             decimal_sep = ',' if last_comma != -1 else '.'
@@ -91,8 +83,7 @@ def parse_moneda(texto: str) -> Decimal:
         tmp = cleaned. replace(thousand_sep, '')
         num_str = tmp.replace(decimal_sep, '.')
     else:
-        # Sólo miles o sin separadores
-        num_str = cleaned. replace(',', '').replace('.', '')
+        num_str = cleaned. replace(',', ''). replace('. ', '')
 
     if sign:
         num_str = sign + num_str
@@ -101,14 +92,12 @@ def parse_moneda(texto: str) -> Decimal:
 def formatear_moneda_es(valor: Decimal) -> str:
     """
     Convierte Decimal -> string con formato tipo '5.600,00'
-    (punto miles, coma decimal).  Siempre 2 decimales.
     """
     if not isinstance(valor, Decimal):
         valor = Decimal(str(valor))
     v = valor.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-    s = f"{v:. 2f}"          # ej: '5600.00'
-    entero, dec = s.split('.')  # '5600', '00'
-    # Insertar puntos de miles
+    s = f"{v:. 2f}"
+    entero, dec = s.split('.')
     grupos = []
     while len(entero) > 3:
         grupos.append(entero[-3:])
@@ -117,7 +106,6 @@ def formatear_moneda_es(valor: Decimal) -> str:
     grupos = grupos[::-1]
     entero_fmt = '.'.join(grupos)
     return f"{entero_fmt},{dec}"
-
 
 def ajustar_price_unit_con_descuento(
     driver,
@@ -129,20 +117,17 @@ def ajustar_price_unit_con_descuento(
     usar_title_prioritario: bool = True
 ):
     """
-    Ajusta el precio unitario en la celda 'price_unit' restando la suma total de los montos
-    del 18% (total_porcentaje_18), pero sin bajar del mínimo min_price.
+    Ajusta el precio unitario en la celda 'price_unit' restando el porcentaje acumulado. 
     """
     if min_price is None:
         min_price = Decimal(os.getenv("MIN_PRICE_UNIT", "3000"))
     
-    # Buscar la celda
     try:
-        celda = driver.find_element(By. XPATH, locator_xpath)
+        celda = driver.find_element(By.XPATH, locator_xpath)
     except Exception as e:
         print(f"❌ No se encontró la celda price_unit: {e}")
         return None
 
-    # Obtener texto original
     raw_title = celda.get_attribute('title') if usar_title_prioritario else None
     raw_text = celda.text
     base_texto = raw_title if (usar_title_prioritario and raw_title) else raw_text
@@ -152,18 +137,13 @@ def ajustar_price_unit_con_descuento(
     except Exception:
         original = Decimal('0')
 
-    # Calcular nuevo valor
     if not isinstance(total_porcentaje_18, Decimal):
         total_porcentaje_18 = Decimal(str(total_porcentaje_18))
 
     provisional = original - total_porcentaje_18
     forzado_a_minimo = provisional < min_price
     nuevo_valor = min_price if forzado_a_minimo else provisional
-
-    # Redondear a 2 decimales
     nuevo_valor = nuevo_valor.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-    # Formatear para envío
     valor_str = formatear_moneda_es(nuevo_valor)
 
     print(f"💡 Precio original: {original} | Total 18% acumulado a restar: {total_porcentaje_18}")
@@ -171,11 +151,9 @@ def ajustar_price_unit_con_descuento(
         print(f"⚠️ La resta bajaba de {min_price}, se fuerza a mínimo.")
     print(f"➡️ Nuevo precio a establecer: {nuevo_valor} (enviado como '{valor_str}')")
 
-    # Click para activar edición
     try:
         celda.click()
-        time. sleep(click_delay)
-        # Limpiar y escribir
+        time.sleep(click_delay)
         acciones = ActionChains(driver)
         acciones.key_down(Keys.CONTROL). send_keys('a').key_up(Keys.CONTROL).perform()
         acciones = ActionChains(driver)
@@ -186,7 +164,7 @@ def ajustar_price_unit_con_descuento(
     except Exception as e:
         print(f"⚠️ Error enviando nuevo valor a price_unit: {e}")
 
-    resultado = {
+    return {
         'original': original,
         'descuento_solicitado': total_porcentaje_18,
         'descuento_aplicado': (original - nuevo_valor) if original > nuevo_valor else Decimal('0'),
@@ -195,13 +173,10 @@ def ajustar_price_unit_con_descuento(
         'forzado_a_minimo': forzado_a_minimo,
         'valor_enviado': valor_str
     }
-    return resultado
 
 def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wait_time=10):
     """
     Pone en nueva_cantidad todos los productos cuyo nombre coincide. 
-    Antes de cada cambio acumula el 18% del subtotal de la fila.
-    Retorna True si terminó sin errores graves.
     """
     xpath_producto = (
         f"//span[@name='name' and contains(translate(text(), "
@@ -214,20 +189,13 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
         
         if total_productos == 0:
             print(f"❌ No se encontró el producto '{nombre_producto}'")
-            
-            # DEBUG: Mostrar TODOS los productos visibles en Odoo
             print("🔍 Productos encontrados en el pedido (primeros 15):")
             todos_productos = driver.find_elements(By.XPATH, "//span[@name='name']")
             for idx, prod in enumerate(todos_productos[:15], 1):
                 texto_crudo = prod.text
-                texto_normalizado = texto_crudo.lower()            
             return False
 
         print(f"✅ Se encontraron {total_productos} productos '{nombre_producto}'")
-        
-        # DEBUG: Mostrar qué texto tiene el producto encontrado
-        for idx, prod in enumerate(productos_iniciales, 1):
-            texto_encontrado = prod.text
     except Exception as e:
         print(f"❌ Error al buscar producto '{nombre_producto}': {e}")
         return False
@@ -235,9 +203,8 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
     productos_editados = 0
     intentos = 0
     max_intentos = total_productos * 2
-
-    # INICIALIZAR ACUMULADOR
     total_porcentaje_18 = Decimal("0. 00")
+    porcentaje_descuento = Decimal(os.getenv("PORCENTAJE_DESCUENTO", "0. 18"))
 
     while productos_editados < total_productos and intentos < max_intentos:
         intentos += 1
@@ -250,8 +217,8 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
             producto_a_editar = None
             fila_a_editar = None
             for producto in productos:
-                fila = producto.find_element(By.XPATH, "./ancestor::tr")
-                celda_cantidad = fila.find_element(By. XPATH, ". //td[@name='product_uom_qty']")
+                fila = producto.find_element(By. XPATH, "./ancestor::tr")
+                celda_cantidad = fila.find_element(By.XPATH, ". //td[@name='product_uom_qty']")
                 cantidad_actual_txt = celda_cantidad.text. strip(). replace(",", ".")
                 try:
                     if float(cantidad_actual_txt) != float(nueva_cantidad):
@@ -267,15 +234,13 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
                 print("✅ Todos los productos ya tienen la cantidad objetivo")
                 break
 
-            # === LEER SUBTOTAL Y CALCULAR 18% ===
             try:
-                # Preferir price_subtotal; si no existe, calcular price_unit * qty
                 try:
                     el_subtotal = fila_a_editar.find_element(By.XPATH, ".//span[@name='price_subtotal']")
                     texto_subtotal = el_subtotal.text
                     subtotal = parse_moneda(texto_subtotal)
                 except:
-                    celda_precio = fila_a_editar.find_element(By.XPATH, ".//td[@name='price_unit']")
+                    celda_precio = fila_a_editar.find_element(By. XPATH, ".//td[@name='price_unit']")
                     precio_txt = celda_precio.get_attribute("title") or celda_precio.text
                     celda_qty = fila_a_editar.find_element(By. XPATH, ".//td[@name='product_uom_qty']")
                     qty_txt = celda_qty.get_attribute("title") or celda_qty.text
@@ -283,23 +248,19 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
                     qty = parse_moneda(qty_txt)
                     subtotal = (precio * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-                porcentaje_aplicado = Decimal(os.getenv("PORCENTAJE_DESCUENTO", "0. 18"))
-                porc_18 = (subtotal * porcentaje_aplicado).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                porc_18 = (subtotal * porcentaje_descuento). quantize(Decimal("0. 01"), rounding=ROUND_HALF_UP)
                 total_porcentaje_18 += porc_18
-                print(f"💡 Subtotal: {subtotal} | 18%: {porc_18} | Acumulado: {total_porcentaje_18}")
+                print(f"💡 Subtotal: {subtotal} | {porcentaje_descuento*100}%: {porc_18} | Acumulado: {total_porcentaje_18}")
             except Exception as e:
-                print(f"⚠️ No se pudo calcular el 18% de la fila: {e}")
+                print(f"⚠️ No se pudo calcular el porcentaje de la fila: {e}")
 
-            # === EDITAR CANTIDAD ===
-            celda_cantidad = fila_a_editar.find_element(By.XPATH, ".//td[@name='product_uom_qty']")
-
-            # Esperar hasta que la celda sea clickeable
+            celda_cantidad = fila_a_editar. find_element(By.XPATH, ".//td[@name='product_uom_qty']")
             wait = WebDriverWait(driver, 15)
             wait.until(EC.element_to_be_clickable(celda_cantidad))
 
             celda_cantidad.click()
             time.sleep(3)
-            ActionChains(driver).send_keys(str(nueva_cantidad)).send_keys(Keys.ENTER). perform()
+            ActionChains(driver).send_keys(str(nueva_cantidad)).send_keys(Keys.ENTER).perform()
             
             productos_editados += 1
             print(f"✅ Producto {productos_editados}/{total_productos}: cantidad editada a {nueva_cantidad}")
@@ -313,14 +274,15 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
             print(f"⚠️ Error en iteración: {e}")
             continue
 
-    print(f"🔢 Total 18% acumulado: {total_porcentaje_18}")
+    print(f"🔢 Total {porcentaje_descuento*100}% acumulado: {total_porcentaje_18}")
     time.sleep(2)
     
     if total_porcentaje_18 > 0:
+        tasa_servicio_nombre = os.getenv("TASA_SERVICIO_NOMBRE", "tasa de serv")
         xpath_tasa_price_unit = (
-            "//span[@name='name' and contains(translate(text(), "
-            "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜÑ','abcdefghijklmnopqrstuvwxyzáéíóúüñ'), "
-            "'tasa de serv')]/ancestor::tr//td[@name='price_unit']"
+            f"//span[@name='name' and contains(translate(text(), "
+            f"'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜÑ','abcdefghijklmnopqrstuvwxyzáéíóúüñ'), "
+            f"'{tasa_servicio_nombre}')]/ancestor::tr//td[@name='price_unit']"
         )
         time.sleep(2)
         ajuste = ajustar_price_unit_con_descuento(
@@ -332,7 +294,7 @@ def editar_cantidad_por_producto(driver, nombre_producto, nueva_cantidad="0", wa
         click_button(driver, "//button[@class='btn btn-primary o_form_button_save']", By.XPATH)
         print("Resumen ajuste price_unit:", ajuste)
     else:
-        print("⚠️ No se acumuló ningún 18% para ajustar la tasa.")
+        print(f"⚠️ No se acumuló ningún porcentaje para ajustar la tasa.")
 
     return True
 
@@ -350,7 +312,6 @@ def Faltante_completo(driver, pedido_id, nombre_producto, nueva_cantidad="0"):
             return False
         
         time.sleep(2)
-        
         print(f"✅ Faltante completo procesado para pedido {pedido_id}")
         return True
         
@@ -361,8 +322,6 @@ def Faltante_completo(driver, pedido_id, nombre_producto, nueva_cantidad="0"):
 def editar_parcial(driver, nombre_producto, nueva_cantidad, cantidad_original, wait_time=10):
     """
     Edita cantidad de un producto único. 
-    Calcula 18% de (cantidad_original - nueva_cantidad) × price_unit leído del DOM.
-    Restaura price_unit original tras editar.
     """
     xpath_producto = (
         f"//span[@name='name' and contains(translate(text(), "
@@ -380,9 +339,8 @@ def editar_parcial(driver, nombre_producto, nueva_cantidad, cantidad_original, w
 
         fila = productos[0]. find_element(By.XPATH, "./ancestor::tr")
 
-        # Leer price_unit original
-        celda_precio = fila.find_element(By. XPATH, ".//td[@name='price_unit']")
-        precio_raw = (celda_precio.get_attribute("title") or celda_precio.text).strip()
+        celda_precio = fila.find_element(By.XPATH, ".//td[@name='price_unit']")
+        precio_raw = (celda_precio.get_attribute("title") or celda_precio.text). strip()
         try:
             precio_unit = parse_moneda(precio_raw)
         except:
@@ -390,27 +348,22 @@ def editar_parcial(driver, nombre_producto, nueva_cantidad, cantidad_original, w
         precio_original_str = formatear_moneda_es(precio_unit)
         print(f"💡 price_unit original: {precio_unit}")
 
-        # Calcular unidades faltantes y 18%
         try:
             unidades_faltantes = Decimal(str(cantidad_original)) - Decimal(str(nueva_cantidad))
         except:
             unidades_faltantes = Decimal('0')
 
-        porcentaje_aplicado = Decimal(os.getenv("PORCENTAJE_DESCUENTO", "0.18"))
+        porcentaje_descuento = Decimal(os.getenv("PORCENTAJE_DESCUENTO", "0.18"))
         
         if unidades_faltantes > 0 and precio_unit > 0:
             valor_faltante = (precio_unit * unidades_faltantes).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            porc_18 = (valor_faltante * porcentaje_aplicado).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            print(f"💡 Unidades faltantes: {unidades_faltantes} | Valor: {valor_faltante} | 18%: {porc_18}")
+            porc_18 = (valor_faltante * porcentaje_descuento).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            print(f"💡 Unidades faltantes: {unidades_faltantes} | Valor: {valor_faltante} | {porcentaje_descuento*100}%: {porc_18}")
         else:
             porc_18 = Decimal('0')
             print("⚠️ Sin faltante o precio = 0.  No ajuste.")
 
-        
-        #Editar cantidad       
-        celda_cantidad = fila.find_element(By. XPATH, ".//td[@name='product_uom_qty']")
-
-        # Esperar hasta que la celda sea clickeable
+        celda_cantidad = fila.find_element(By.XPATH, ".//td[@name='product_uom_qty']")
         wait = WebDriverWait(driver, 15)
         wait.until(EC.element_to_be_clickable(celda_cantidad))
 
@@ -422,40 +375,37 @@ def editar_parcial(driver, nombre_producto, nueva_cantidad, cantidad_original, w
 
         wait = WebDriverWait(driver, 15)
 
-        # Re-localizar fila tras la edición
         try:
-            wait.until(EC.presence_of_element_located((By. XPATH, xpath_producto)))
+            wait.until(EC.presence_of_element_located((By.XPATH, xpath_producto)))
             productos2 = driver.find_elements(By.XPATH, xpath_producto)
             if not productos2:
                 print("⚠️ Producto no encontrado tras editar (DOM refrescado)")
                 return True
 
-            fila2 = productos2[0]. find_element(By.XPATH, "./ancestor::tr")
+            fila2 = productos2[0].find_element(By.XPATH, "./ancestor::tr")
             celda_precio2 = wait.until(
                 EC.visibility_of_element_located((By.XPATH, ".//td[@name='price_unit']"))
             )
             celda_precio2 = fila2.find_element(By.XPATH, ".//td[@name='price_unit']")
 
-            # Restaurar price_unit
             wait.until(EC.element_to_be_clickable(celda_precio2))
-            celda_precio2. click()
+            celda_precio2.click()
             time.sleep(3)
             ActionChains(driver).send_keys(precio_original_str).send_keys(Keys.ENTER).perform()
             time.sleep(3)
 
-            # Guardar
             click_button(driver, "//button[@class='btn btn-primary o_form_button_save']", By.XPATH)
             print("✅ Pedido guardado con price_unit restaurado")
             time.sleep(3)
         except Exception as e:
             print(f"⚠️ Error restaurando price_unit: {e}")
 
-        # Ajustar tasa de servicio si hay 18%
         if porc_18 > 0:
+            tasa_servicio_nombre = os.getenv("TASA_SERVICIO_NOMBRE", "tasa de serv")
             xpath_tasa_price_unit = (
-                "//span[@name='name' and contains(translate(text(), "
-                "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜÑ','abcdefghijklmnopqrstuvwxyzáéíóúüñ'), "
-                "'tasa de serv')]/ancestor::tr//td[@name='price_unit']"
+                f"//span[@name='name' and contains(translate(text(), "
+                f"'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÜÑ','abcdefghijklmnopqrstuvwxyzáéíóúüñ'), "
+                f"'{tasa_servicio_nombre}')]/ancestor::tr//td[@name='price_unit']"
             )
             time.sleep(3)
             ajuste = ajustar_price_unit_con_descuento(
@@ -467,7 +417,7 @@ def editar_parcial(driver, nombre_producto, nueva_cantidad, cantidad_original, w
             click_button(driver, "//button[@class='btn btn-primary o_form_button_save']", By.XPATH)
             print("Resumen ajuste price_unit:", ajuste)
         else:
-            print("⚠️ 18% = 0. No ajuste de tasa.")
+            print(f"⚠️ {porcentaje_descuento*100}% = 0.  No ajuste de tasa.")
 
         return True
 
@@ -501,14 +451,14 @@ def get_google_credentials():
         "type": "service_account",
         "project_id": os.getenv("GOOGLE_PROJECT_ID"),
         "private_key_id": os.getenv("GOOGLE_PRIVATE_KEY_ID"),
-        "private_key": os.getenv("GOOGLE_PRIVATE_KEY"). replace('\\n', '\n'),
+        "private_key": os.getenv("GOOGLE_PRIVATE_KEY").replace('\\n', '\n'),
         "client_email": os.getenv("GOOGLE_CLIENT_EMAIL"),
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
         "auth_uri": "https://accounts. google.com/o/oauth2/auth",
         "token_uri": "https://oauth2. googleapis.com/token",
         "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
         "client_x509_cert_url": os.getenv("GOOGLE_CLIENT_CERT_URL"),
-        "universe_domain": "googleapis. com"
+        "universe_domain": "googleapis.com"
     }
 
 def create_temp_json_file(credentials_dict):
@@ -518,7 +468,6 @@ def create_temp_json_file(credentials_dict):
     temp_file.close()
     return temp_file.name
 
-# === CONEXIÓN GOOGLE SHEETS ===
 def conectar_google_sheets():
     """Conecta a Google Sheets usando credenciales de variables de entorno"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis. com/auth/drive"]
@@ -529,18 +478,17 @@ def conectar_google_sheets():
     credenciales = ServiceAccountCredentials.from_json_keyfile_name(temp_credentials_path, scope)
     cliente = gspread.authorize(credenciales)
     
-    # Limpiar archivo temporal
     os.remove(temp_credentials_path)
     
     return cliente
 
-# === INICIO DEL SCRIPT ===
 def main():
     # Conectar a Google Sheets
     cliente = conectar_google_sheets()
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     sheet = cliente.open_by_key(sheet_id)
-    worksheet = sheet.worksheet(os.getenv("GOOGLE_WORKSHEET_NAME", "check_nueva_info_desvios"))
+    worksheet_name = os.getenv("GOOGLE_WORKSHEET_NAME", "check_nueva_info_desvios")
+    worksheet = sheet.worksheet(worksheet_name)
     valores = worksheet.get_all_values()
 
     # Configurar Selenium
@@ -554,7 +502,7 @@ def main():
     driver.implicitly_wait(10)
     wait = WebDriverWait(driver, 20)
 
-    # === LOGIN ===
+    # LOGIN
     odoo_url = os.getenv("ODOO_LOGIN_URL")
     odoo_user = os.getenv("ODOO_USER")
     odoo_password = os.getenv("ODOO_PASSWORD")
@@ -570,7 +518,7 @@ def main():
     
     boton_login = wait.until(EC.element_to_be_clickable((By. XPATH, "//button[text()='Log in']")))
     boton_login.click()
-    time.sleep(3)
+    time. sleep(3)
     
     try:
         boton_mensaje = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "message-btn")))
@@ -582,10 +530,12 @@ def main():
     
     time.sleep(10)
 
-    # Procesar desvíos operativos
+    # Procesar desvíos
     dias_offset = int(os.getenv("DIAS_OFFSET", "0"))
     fecha_hoy = (datetime.now() + timedelta(days=dias_offset)).strftime("%d/%m/%Y")
     print(f"📅 Fecha de hoy: {fecha_hoy}")
+
+    pais_filtro = os.getenv("PAIS_FILTRO", "ar"). lower()
 
     for i, fila in enumerate(valores):
         if i == 0:
@@ -601,8 +551,7 @@ def main():
         if fecha_pedido != fecha_hoy:
             continue
         
-        if pais. lower() != "ar":
-            print(f"⏭️ Fila {i} omitida: país {pais} no es AR")
+        if pais. lower() != pais_filtro:
             continue
         
         if not pedido_id or not nombre_producto:
@@ -613,7 +562,7 @@ def main():
         resultado = False
         
         try:
-            if tipo_faltante.lower() == "faltante":
+            if tipo_faltante. lower() == "faltante":
                 print(f"🔄 Procesando faltante completo - Pedido: {num_pedido} (ID: {pedido_id})")
                 resultado = Faltante_completo(driver, pedido_id, nombre_producto, nueva_cantidad="0")
                 time.sleep(2)
